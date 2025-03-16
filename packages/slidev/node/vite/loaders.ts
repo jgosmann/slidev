@@ -1,6 +1,9 @@
 import type { ResolvedSlidevOptions, SlideInfo, SlidePatch, SlidevData, SlidevServerOptions } from '@slidev/types'
 import type { LoadResult } from 'rollup'
 import type { Plugin, ViteDevServer } from 'vite'
+import type { VirtualModuleTemplate } from '../virtual/types'
+import { existsSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { notNullish, range } from '@antfu/utils'
 import * as parser from '@slidev/parser/fs'
 import equal from 'fast-deep-equal'
@@ -10,7 +13,7 @@ import { createDataUtils } from '../options'
 import MarkdownItKatex from '../syntax/markdown-it/markdown-it-katex'
 import markdownItLink from '../syntax/markdown-it/markdown-it-link'
 import { getBodyJson, updateFrontmatterPatch } from '../utils'
-import { templates } from '../virtual'
+import { templates as builtinTemplates } from '../virtual'
 import { templateConfigs } from '../virtual/configs'
 import { templateMonacoRunDeps } from '../virtual/monaco-deps'
 import { templateMonacoTypes } from '../virtual/monaco-types'
@@ -38,6 +41,7 @@ export function createSlidesLoader(
     frontmatter: string[]
   }
   let sourceIds = resolveSourceIds(data)
+  const templates = resolveTemplates(options.roots)
 
   function resolveSourceIds(data: SlidevData) {
     const ids: ResolvedSourceIds = {
@@ -50,6 +54,21 @@ export function createSlidesLoader(
       }
     }
     return ids
+  }
+
+  async function resolveTemplates(roots: string[]): Promise<VirtualModuleTemplate[]> {
+    const userTemplates = await Promise.all(roots.flatMap((root) => {
+      const modulePath = join(root, 'virtual')
+      if (!existsSync(modulePath)) {
+        return []
+      }
+      return readdirSync(modulePath).filter(
+        fileName => ['.ts', '.js', '.mts', '.mjs'].some(
+          ext => fileName.endsWith(ext),
+        ),
+      ).map(fileName => import(join(modulePath, fileName)))
+    }))
+    return [...userTemplates.map(template => template.default as VirtualModuleTemplate), ...builtinTemplates]
   }
 
   function updateServerWatcher() {
@@ -269,7 +288,7 @@ export function createSlidesLoader(
     },
 
     async load(id): Promise<LoadResult> {
-      const template = templates.find(i => i.id === id)
+      const template = (await templates).find(i => i.id === id)
       if (template) {
         return {
           code: await template.getContent.call(this, options),
